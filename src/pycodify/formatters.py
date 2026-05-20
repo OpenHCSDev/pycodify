@@ -317,6 +317,13 @@ def _format_dataclass_expression(
             continue
 
         if dataclasses.is_dataclass(current_value) and not isinstance(current_value, type):
+            formatter = SourceFormatter.get_formatter(current_value)
+            if not isinstance(formatter, DataclassFormatter):
+                frag = formatter.format(current_value, field_ctx)
+                imports |= frag.imports
+                lines.append(f"{field_name}={frag.code}")
+                continue
+
             nested_code, nested_imports, nested_has_fields = _format_dataclass_expression(
                 current_value,
                 field_ctx,
