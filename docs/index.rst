@@ -1,17 +1,16 @@
-pycodify Documentation
-======================
+pycodify
+========
 
-**pycodify** serializes Python objects to executable Python source code with automatic import resolution.
+pycodify serializes Python objects to executable Python source while resolving
+imports and name collisions.
 
-The key insight: **Python source code is a serialization format.** Rather than inventing a format and writing loaders, pycodify emits code that Python itself interprets. The import system becomes the deserializer.
-
-Quick Start
+Quick start
 -----------
 
 .. code-block:: python
 
-   from pycodify import Assignment, generate_python_source
    from dataclasses import dataclass
+   from pycodify import Assignment, generate_python_source
 
    @dataclass
    class Config:
@@ -19,32 +18,10 @@ Quick Start
        value: int = 42
 
    config = Config(name="production", value=100)
-   code = generate_python_source(Assignment("config", config), clean_mode=True)
-   print(code)
-   # Output:
-   # from __main__ import Config
-   # config = Config(name='production', value=100)
+   code = generate_python_source(Assignment("config", config))
 
-Features
---------
-
-- **Complete Executable Source**: Generates imports + code, not just expressions
-- **Type-Preserving**: Enums, Paths, callables serialize as themselves
-- **Collision Handling**: Automatic aliasing for name collisions across modules
-- **Clean Mode**: Omit fields matching defaults for concise output
-- **Extensible**: Register custom formatters for domain-specific types
-
-Why Python Source?
-------------------
-
-| Format | Diffable | Inspectable | Editable | Type-preserving | Cross-version |
-|--------|:--------:|:-----------:|:--------:|:---------------:|:-------------:|
-| pickle | ✗ | ✗ | ✗ | ✓ | ✗ |
-| JSON/YAML | ✓ | ✓ | ✓ | ✗ | ✓ |
-| Python source | ✓ | ✓ | ✓ | ✓ | ✓ |
-
-Contents
---------
+Explicit mode is the default (``clean_mode=False``) and includes default-valued
+fields. Pass ``clean_mode=True`` only when default elision is desired.
 
 .. toctree::
    :maxdepth: 2
@@ -53,20 +30,9 @@ Contents
    api
    architecture
 
-API Reference
--------------
+Ownership
+---------
 
-.. autosummary::
-   :toctree: _autosummary
-
-   pycodify.core
-   pycodify.formatters
-   pycodify.imports
-
-Indices and Tables
-------------------
-
-* :ref:`genindex`
-* :ref:`modindex`
-* :ref:`search`
-
+pycodify owns source fragments, imports, formatter registration, collision
+handling, and generic Python formatting. Host packages own their domain
+formatters and round-trip policies.

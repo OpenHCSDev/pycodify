@@ -1,16 +1,17 @@
 """Sphinx configuration for pycodify."""
 import os
 import sys
+from pathlib import Path
 
 # Add source to path
-sys.path.insert(0, os.path.abspath("../src"))
+sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
 
 # Project information
 project = "pycodify"
 copyright = "2024, Tristan Simas"
 author = "Tristan Simas"
-version = "0.1.0"
-release = "0.1.0"
+version = "0.1"
+release = "0.1.2"
 
 # General configuration
 extensions = [
@@ -54,7 +55,6 @@ autosummary_generate = True
 html_theme = "sphinx_rtd_theme"
 html_theme_options = {
     "logo_only": False,
-    "display_version": True,
     "prev_next_buttons_location": "bottom",
     "style_external_links": False,
     "vcs_pageview_mode": "",
@@ -70,4 +70,3 @@ html_favicon = None
 intersphinx_mapping = {
     "python": ("https://docs.python.org/3", None),
 }
-

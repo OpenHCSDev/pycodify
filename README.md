@@ -14,7 +14,7 @@ class Config:
     value: int = 42
 
 config = Config(name="production", value=100)
-code = generate_python_source(Assignment("config", config), clean_mode=True)
+code = generate_python_source(Assignment("config", config))
 print(code)
 # Output:
 # from __main__ import Config
@@ -27,9 +27,12 @@ print(code)
 |--------|:--------:|:-----------:|:--------:|:---------------:|:-------------:|
 | pickle | ✗ | ✗ | ✗ | ✓ | ✗ |
 | JSON/YAML | ✓ | ✓ | ✓ | ✗ | ✓ |
-| Python source | ✓ | ✓ | ✓ | ✓ | ✓ |
+| Python source | ✓ | ✓ | ✓ | ✓ | Depends on imported APIs |
 
-Binary formats like `pickle` cannot be diffed, inspected, or edited. Text formats like JSON lose type information. Python source code has all desired properties: it is diffable, inspectable, editable, type-preserving, and cross-version stable.
+Binary formats like `pickle` cannot be diffed, inspected, or edited. Text
+formats like JSON lose type information. Python source is diffable, inspectable,
+editable, and type-preserving, but replay still depends on the imported APIs and
+constructor signatures remaining compatible.
 
 ## Features
 
@@ -40,6 +43,14 @@ Binary formats like `pickle` cannot be diffed, inspected, or edited. Text format
 - **Extensible**: Register custom formatters for domain-specific types
 
 ## Documentation
+
+Explicit mode is the default (``clean_mode=False``), preserving every field for
+reproducibility. Pass ``clean_mode=True`` only when concise, default-eliding
+source is desired.
+
+Generated output is executable Python, not a sandboxed data format. Review it
+before execution and never call `exec` on source generated from untrusted
+objects, custom formatters, headers, or edited files.
 
 Full documentation available at [pycodify.readthedocs.io](https://pycodify.readthedocs.io)
 
