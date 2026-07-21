@@ -11,7 +11,7 @@ project = "pycodify"
 copyright = "2024, Tristan Simas"
 author = "Tristan Simas"
 version = "0.1"
-release = "0.1.2"
+release = "0.1.3"
 
 # General configuration
 extensions = [

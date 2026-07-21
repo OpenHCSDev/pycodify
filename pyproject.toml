@@ -4,7 +4,7 @@ build-backend = "hatchling.build"
 
 [project]
 name = "pycodify"
-version = "0.1.2"
+version = "0.1.3"
 description = "Python source code as a serialization format with automatic import resolution"
 authors = [{name = "Tristan Simas", email = "tristan.simas@mail.mcgill.ca"}]
 license = {text = "MIT"}

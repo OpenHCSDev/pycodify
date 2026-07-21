@@ -14,7 +14,7 @@ from .imports import resolve_imports
 # Register default formatters
 from . import formatters as _formatters  # noqa: F401
 
-__version__ = "0.1.2"
+__version__ = "0.1.3"
 
 __all__ = [
     "Assignment",
