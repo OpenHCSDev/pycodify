@@ -2,7 +2,9 @@ from __future__ import annotations
 
 from abc import ABC, abstractmethod
 from dataclasses import dataclass, field, replace
-from typing import Any, ClassVar, Dict, FrozenSet, Iterable, List, Tuple
+from collections.abc import Mapping
+from types import MappingProxyType
+from typing import Any, ClassVar, FrozenSet, Iterable, List, Tuple
 
 
 @dataclass(frozen=True)
@@ -19,13 +21,18 @@ class SourceFragment:
         )
 
 
-@dataclass
+@dataclass(frozen=True)
 class FormatContext:
     """Context passed through serialization."""
 
     indent: int = 0
     clean_mode: bool = False
-    name_mappings: Dict[Tuple[str, str], str] = field(default_factory=dict)
+    name_mappings: Mapping[Tuple[str, str], str] = field(
+        default_factory=lambda: MappingProxyType({})
+    )
+    extensions: Mapping[type[object], object] = field(
+        default_factory=lambda: MappingProxyType({})
+    )
 
     def indented(self) -> "FormatContext":
         return replace(self, indent=self.indent + 1)
@@ -33,6 +40,11 @@ class FormatContext:
     @property
     def indent_str(self) -> str:
         return "    " * self.indent
+
+    def extension(self, extension_type: type[Any]) -> Any | None:
+        """Return one caller-owned rendering extension by exact nominal type."""
+
+        return self.extensions.get(extension_type)
 
 
 @dataclass(frozen=True)
@@ -119,16 +131,22 @@ def to_source(value: Any, ctx: FormatContext | None = None) -> SourceFragment:
     return formatter.format(value, ctx)
 
 
-def generate_python_source(obj: Any, header: str = "", clean_mode: bool = False) -> str:
+def generate_python_source(
+    obj: Any,
+    header: str = "",
+    clean_mode: bool = False,
+    *,
+    context: FormatContext | None = None,
+) -> str:
     """Generate complete Python source with imports."""
     from .imports import resolve_imports
 
-    ctx = FormatContext(clean_mode=clean_mode)
+    ctx = context or FormatContext(clean_mode=clean_mode)
     fragment = to_source(obj, ctx)
 
     import_lines, name_mappings = resolve_imports(fragment.imports)
 
-    ctx = FormatContext(clean_mode=clean_mode, name_mappings=name_mappings)
+    ctx = replace(ctx, name_mappings=MappingProxyType(name_mappings))
     fragment = to_source(obj, ctx)
 
     code_lines: List[str] = []

@@ -3,7 +3,15 @@
 import pytest
 from dataclasses import dataclass
 from enum import Enum
-from pycodify import Assignment, generate_python_source
+from types import MappingProxyType
+
+from pycodify import (
+    Assignment,
+    FormatContext,
+    SourceFormatter,
+    SourceFragment,
+    generate_python_source,
+)
 
 
 class Color(Enum):
@@ -19,6 +27,22 @@ class SimpleConfig:
     name: str = "default"
     value: int = 42
     enabled: bool = True
+
+
+class ExtensionProbe:
+    pass
+
+
+class ExtensionProbeFormatter(SourceFormatter):
+    priority = 200
+
+    def can_format(self, value):
+        return isinstance(value, ExtensionProbe)
+
+    def format(self, value, context):
+        del value
+        marker = context.extension(ExtensionProbe)
+        return SourceFragment(repr(marker), frozenset())
 
 
 class TestBasicGeneration:
@@ -77,6 +101,18 @@ class TestBasicGeneration:
         except Exception as e:
             pytest.fail(f"Generated source is not executable: {e}\n{source}")
 
+    def test_context_extensions_survive_both_render_passes(self):
+        context = FormatContext(
+            extensions=MappingProxyType({ExtensionProbe: "preserved"})
+        )
+
+        source = generate_python_source(
+            Assignment("value", ExtensionProbe()),
+            context=context,
+        )
+
+        assert source == "value = 'preserved'"
+
 
 class TestImportCollisions:
     """Test handling of import name collisions."""
@@ -91,4 +127,3 @@ class TestImportCollisions:
         
         assert source is not None
         assert len(source) > 0
-
