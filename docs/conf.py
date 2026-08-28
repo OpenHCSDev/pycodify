@@ -1,6 +1,7 @@
 """Sphinx configuration for pycodify."""
-import os
+
 import sys
+from importlib import import_module
 from pathlib import Path
 
 # Add source to path
@@ -10,8 +11,8 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
 project = "pycodify"
 copyright = "2024, Tristan Simas"
 author = "Tristan Simas"
-version = "0.1"
-release = "0.1.3"
+release = import_module("pycodify").__version__
+version = ".".join(release.split(".")[:2])
 
 # General configuration
 extensions = [
