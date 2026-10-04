@@ -1,7 +1,7 @@
 """Tests for pycodify.core module."""
 
 import pytest
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from enum import Enum
 from types import MappingProxyType
 
@@ -27,6 +27,36 @@ class SimpleConfig:
     name: str = "default"
     value: int = 42
     enabled: bool = True
+
+
+@dataclass
+class VolumeConfig(SimpleConfig):
+    depth: int = 60
+
+
+@dataclass
+class NominalConfig(SimpleConfig):
+    pass
+
+
+@dataclass
+class NestedConfig:
+    image: SimpleConfig = field(default_factory=SimpleConfig)
+
+
+@pytest.mark.parametrize("image_type", [VolumeConfig, NominalConfig])
+def test_clean_nested_defaults_preserve_authored_nominal_owner(image_type):
+    config = NestedConfig(image=image_type())
+    source = generate_python_source(Assignment("config", config), clean_mode=True)
+    namespace = {}
+    exec(source, namespace)
+    assert type(namespace["config"].image) is image_type
+    assert namespace["config"] == config
+
+
+def test_clean_nested_unchanged_default_remains_omitted():
+    source = generate_python_source(Assignment("config", NestedConfig()), clean_mode=True)
+    assert "image=" not in source
 
 
 class ExtensionProbe:
