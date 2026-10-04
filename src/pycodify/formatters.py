@@ -328,7 +328,11 @@ def _format_dataclass_expression(
                 current_value,
                 field_ctx,
             )
-            if context.clean_mode and not nested_has_fields:
+            if (
+                context.clean_mode
+                and not nested_has_fields
+                and type(current_value) is type(default_value)
+            ):
                 continue
             imports |= nested_imports
             lines.append(f"{field_name}={nested_code}")
