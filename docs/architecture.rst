@@ -6,7 +6,8 @@ Two-Pass Algorithm
 
 Generating executable source requires knowing import aliases before emitting code. But aliases depend on detecting collisions, which requires visiting all types first. This creates a dependency: code generation requires alias resolution, but alias resolution requires traversing the object graph.
 
-pycodify solves this with two passes:
+pycodify solves this with two passes, preceded by a path-discovery pass
+(see *Path factoring* below):
 
 1. **Collection pass**: Traverse the object, emit code fragments, and collect
    ``(module, name)`` import pairs.
@@ -31,12 +32,26 @@ Each type maps to a ``SourceFormatter`` that emits a ``SourceFragment(code, impo
            return isinstance(value, Enum)
 
        def format(self, value: Enum, context: FormatContext) -> SourceFragment:
-           cls = value.__class__
-           import_pair = (cls.__module__, cls.__name__)
-           name = context.name_mappings.get(import_pair, cls.__name__)
-           return SourceFragment(f"{name}.{value.name}", frozenset([import_pair]))
+           enum_type = imported_name(type(value).__module__, type(value).__qualname__, context)
+           return SourceFragment(f"{enum_type.code}.{value.name}", enum_type.imports)
 
-Priority-based dispatch selects the most specific formatter. Domain extensions add formatters without modifying core code.
+Priority-based dispatch selects the most specific formatter. Domain extensions add formatters without modifying core code. A value no formatter accepts raises ``TypeError``: pycodify never emits ``repr`` text it cannot load back.
+
+Qualified names
+---------------
+
+``imported_name(module, qualname, context)`` is the one rule for spelling an
+importable object. It imports the root of ``__qualname__`` and spells the rest as
+attribute access, so ``Outer.Mode.FAST`` imports ``Outer``. Enum members,
+classes, functions, class-bound methods, named tuples and dataclass constructors
+all use it. Objects defined inside a function raise ``TypeError``.
+
+Values that own their spelling
+------------------------------
+
+A value whose source is not its constructor subclasses ``PythonSourceLiteral``
+and implements ``source_fragment(context)``, typically building on
+``imported_name`` so collision aliases apply.
 
 Core Components
 ---------------
@@ -49,7 +64,7 @@ Core Components
 
 **FormatContext**
   Carries indentation depth, ``clean_mode``, the ``(module, name)`` to
-  local-name mapping, and caller-owned typed extensions. ``indented()`` returns
+  local-name mapping, and the pass's ``PathRendering``. ``indented()`` returns
   a copied context and does not mutate its caller.
 
 **resolve_imports**
@@ -60,27 +75,17 @@ Core Components
   Orchestrates collection, resolution, and regeneration to produce a complete
   source string.
 
-Immutable typed context extensions
-----------------------------------
+Path factoring
+--------------
 
-``FormatContext`` is frozen. Its default mappings are read-only mapping proxies,
-and context evolution uses dataclass replacement rather than mutation. A host
-may supply an ``extensions`` mapping keyed by the exact nominal type of each
-rendering policy or state record. A formatter retrieves one value with
-``context.extension(ExtensionType)``; pycodify does not search base classes,
-string keys, or a fallback chain.
-
-``generate_python_source(..., context=context)`` threads the caller's context
-through collection and regeneration. Import resolution replaces only
-``name_mappings`` for the second pass, so typed extensions and all other context
-fields survive. When a context is supplied, its ``clean_mode`` is authoritative;
-the separate ``clean_mode=`` argument is used only when pycodify constructs the
-context.
-
-Extensions provide formatting context, not formatter dispatch. New value
-families still extend the ``SourceFormatter`` registry, while the exact extension
-type allows that formatter to obtain host-owned rendering information without
-adding host imports or fields to pycodify core.
+``generate_python_source`` first renders the document with a ``PathCollector``
+on ``FormatContext.paths`` to record every ``pathlib.Path`` value. A
+``PathFactoring`` plan then binds each directory shared by two or more absolute
+paths (``path_root = Path('/data/screen')``) and each repeated absolute path
+(``path_1 = path_root / 'plate_A'``) once, at the top of the document, and the
+two rendering passes spell those paths through the bindings. Relative paths and
+strings are never factored. ``to_source`` alone uses the base ``PathRendering``,
+which spells each path as ``Path('...')``.
 
 Clean Mode
 ----------
@@ -107,25 +112,13 @@ not sandboxing or validation of generated programs. Hosts must restrict inputs
 and custom formatters to trusted sources, review persisted code before running
 it, and define their own compatibility policy for imported domain APIs.
 
-Lazy Dataclass Integration
----------------------------
-
-For dataclasses with ``__getattribute__`` interception (used for hierarchical config inheritance), formatters use ``object.__getattribute__`` to access raw field values without triggering lazy resolution:
-
-.. code-block:: python
-
-   # In DataclassFormatter
-   if hasattr(instance, "_resolve_field_value"):
-       # Bypass __getattribute__ to get raw None vs concrete value
-       current_value = object.__getattribute__(instance, field_name)
-   else:
-       current_value = getattr(instance, field_name)
-
-This distinguishes explicitly-set values from inherited ones during serialization.
-
 Module Structure
 ----------------
 
 - **core.py**: Main API (``Assignment``, ``generate_python_source``)
-- **formatters.py**: Built-in formatters (dataclass, enum, primitive types)
+- **formatters.py**: Built-in formatters (dataclass, enum, class, callable, primitive types)
+- **paths.py**: Document-level path factoring
+
+Lazy configuration dataclasses (ObjectState) are formatted by
+``objectstate.codegen``, which registers its own formatter.
 - **imports.py**: Import resolution and collision handling
