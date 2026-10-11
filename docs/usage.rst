@@ -117,62 +117,37 @@ level. ``name_mappings`` maps ``(module, imported_name)`` pairs to the local
 names chosen by ``resolve_imports``; callers normally let
 ``generate_python_source`` populate it during the second pass.
 
-Typed rendering extensions
---------------------------
+Values that own their source
+----------------------------
 
-A host can attach immutable rendering context without adding host-specific state
-to pycodify. Keys are exact nominal types, and the same context reaches both
-render passes:
+A value whose source is not its dataclass constructor implements
+``PythonSourceLiteral``:
 
 .. code-block:: python
 
    from dataclasses import dataclass
-   from types import MappingProxyType
 
    from pycodify import (
        Assignment,
        FormatContext,
-       SourceFormatter,
+       PythonSourceLiteral,
        SourceFragment,
        generate_python_source,
+       imported_name,
    )
 
    @dataclass(frozen=True)
-   class RenderPolicy:
-       marker: str
+   class RegistryLookup(PythonSourceLiteral):
+       key: str
 
-   class PolicyValue:
-       pass
+       def source_fragment(self, context: FormatContext) -> SourceFragment:
+           lookup = imported_name("myapp.registry", "get_function", context)
+           return SourceFragment(f"{lookup.code}({self.key!r})", lookup.imports)
 
-   class PolicyValueFormatter(SourceFormatter):
-       priority = 200
-
-       def can_format(self, value):
-           return isinstance(value, PolicyValue)
-
-       def format(self, value, context):
-           del value
-           policy = context.extension(RenderPolicy)
-           if policy is None:
-               raise RuntimeError("RenderPolicy is required")
-           return SourceFragment(repr(policy.marker))
-
-   context = FormatContext(
-       clean_mode=True,
-       extensions=MappingProxyType(
-           {RenderPolicy: RenderPolicy(marker="preserved")}
-       ),
-   )
-   source = generate_python_source(
-       Assignment("value", PolicyValue()),
-       context=context,
-   )
-   assert source == "value = 'preserved'"
-
-``extension(RenderPolicy)`` does not return a value stored under a base class or
-string key. This exact-type lookup keeps extension ownership explicit. Treat the
-extension mapping as immutable; use a new ``FormatContext`` when the host needs
-different state.
+   source = generate_python_source(Assignment("func", RegistryLookup("gauss")))
+   # from myapp.registry import get_function
+   #
+   # func = get_function('gauss')
 
 Nested Dataclasses
 -------------------
