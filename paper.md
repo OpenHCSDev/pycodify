@@ -19,143 +19,131 @@ bibliography: paper.bib
 
 # Summary
 
-`pycodify` serializes Python objects to executable Python source code. The output includes correct imports, handles name collisions via aliasing, and can be `exec()`'d to recreate the original object:
+`pycodify` writes Python objects as executable Python source. The output is a complete module: the imports it needs, with aliases where two imported names collide, then the code.
 
 ```python
-# In-memory object → executable source with imports
-from openhcs.constants import DtypeConversion
-from openhcs.core.config import PathPlanningConfig, PipelineConfig
+# plates.py
+from dataclasses import dataclass
+from enum import Enum
+from pathlib import Path
 
-config = PipelineConfig(
-    path_planning=PathPlanningConfig(output_dir_suffix="_custom"),
-    dtype=DtypeConversion.PRESERVE_INPUT,
+class Mode(Enum):
+    FAST = "fast"
+    SLOW = "slow"
+
+@dataclass
+class Reader:
+    root: Path = Path("data")
+    mode: Mode = Mode.FAST
+    workers: int = 1
+```
+
+```python
+from pathlib import Path
+from plates import Mode, Reader
+from pycodify import Assignment, generate_python_source
+
+reader = Reader(root=Path("/data/screen"), mode=Mode.SLOW)
+print(generate_python_source(Assignment("reader", reader), clean_mode=True))
+```
+
+prints
+
+```python
+from pathlib import Path
+from plates import (
+    Mode,
+    Reader,
+)
+
+reader = Reader(
+    root=Path('/data/screen'),
+    mode=Mode.SLOW
 )
 ```
 
-The key insight: **Python source code is a serialization format.** Rather than inventing a format and writing loaders, `pycodify` emits code that Python itself interprets. The import system becomes the deserializer.
+Executing that text rebuilds an equal object: the test suite checks this for 22 values across the supported types. Python source is the format and the interpreter is the loader.
 
 # Statement of Need
 
-Serialization formats occupy a spectrum:
+| Format | Diffable | Inspectable | Editable | Type-preserving |
+|--------|:--------:|:-----------:|:--------:|:---------------:|
+| pickle | ✗ | ✗ | ✗ | ✓ |
+| JSON/YAML | ✓ | ✓ | ✓ | ✗ |
+| Python source | ✓ | ✓ | ✓ | for supported types |
 
-| Format | Diffable | Inspectable | Editable | Type-preserving | Cross-version |
-|--------|:--------:|:-----------:|:--------:|:---------------:|:-------------:|
-| pickle | ✗ | ✗ | ✗ | ✓ | ✗ |
-| JSON/YAML | ✓ | ✓ | ✓ | ✗ | ✓ |
-| Python source | ✓ | ✓ | ✓ | ✓ | ✓ |
+Binary formats like `pickle` [@pickle] cannot be diffed or edited as text. JSON has no enum, path or callable values, so each must be encoded as a string and decoded by hand. Python source is text, and it names an enum member, a `Path`, a class or a function as itself.
 
-Binary formats like `pickle` [@pickle] cannot be diffed, inspected, or edited without execution. Text formats like JSON lose type information—an Enum becomes a string, a Path becomes a string, a callable cannot be represented. `repr()` produces code fragments but not complete programs.
+`pycodify` formats `None`, builtin numbers, `bytes`, `str`, lists, tuples, named tuples, dicts, sets, `Path`, enum and flag members, classes, dataclass instances, and importable callables (module-level functions, builtins, class methods). A value with no formatter raises `TypeError`, as does anything defined inside a function. An instance of a subclass of a builtin number type or of `str` (`numpy.float64`, for example) is written as the builtin value it equals, so its type is not kept.
 
-Python source code has all desired properties simultaneously: it is diffable (text), inspectable (readable), editable (valid syntax), type-preserving (Enums, Paths, callables serialize as themselves), and cross-version stable (if the code runs, deserialization succeeded).
-
-The challenge is generating *complete* source—not just expressions, but the imports required to make those expressions executable. This requires solving import collisions: two classes named `Config` from different modules cannot both be imported without aliasing.
+Generated source names classes and functions by import path, so it loads only where those names can be imported. Like any Python file, it must not be executed if it comes from an untrusted source.
 
 # State of the Field
 
-`pickle` [@pickle], `dill` [@dill], and `cloudpickle` [@cloudpickle] serialize to opaque binary. `repr()` and `ast.unparse` [@ast] produce code fragments without imports. No existing tool produces complete, executable Python source with automatic import resolution and collision handling.
+`pickle` [@pickle], `dill` [@dill], and `cloudpickle` [@cloudpickle] serialize to binary. `repr()` returns an expression without imports, and only for types whose `repr` is valid source. `ast.unparse` [@ast] turns a syntax tree into source; it does not take a live object. `pycodify` starts from the object and produces the module with its imports.
 
 # Software Design
 
-## Two-Pass Algorithm
+## Rendering Passes
 
-Generating executable source requires knowing import aliases before emitting code. But aliases depend on detecting collisions, which requires visiting all types first. This creates a dependency: code generation requires alias resolution, but alias resolution requires traversing the object graph.
+A formatter returns a `SourceFragment(code, imports)`, where `imports` is a set of `(module, name)` pairs. Aliases are known only after every pair has been seen, so `generate_python_source` renders more than once:
 
-`pycodify` solves this with two passes:
+1. **Path discovery**: render once to record every `pathlib.Path` in the value.
+2. **Import collection**: render the body and take the union of the import pairs.
+3. **Resolution**: `resolve_imports` finds names imported from more than one module and gives each an alias built from the name and its module.
+4. **Final render**: render again with the resulting `name_mappings`.
 
-1. **Collection pass**: Traverse the object, emit code fragments, collect `(module, name)` import pairs
-2. **Resolution**: Detect collisions (same name, different modules), generate deterministic aliases
-3. **Regeneration pass**: Re-traverse with resolved `name_mappings`, emit final code
+For `Config` imported from `alpha.sources` and from `beta.sources`, together with `Pipeline`, the import block is
 
-This is not an optimization—it is structurally necessary. A single-pass algorithm cannot know whether `Config` needs aliasing until it has seen all types that might also be named `Config`.
-
-**Example**: Consider a configuration object with two fields:
 ```python
-config = PipelineConfig(
-    path_planning=PathPlanningConfig(...),
-    dtype=DtypeConversion.PRESERVE_INPUT,
+from alpha.sources import (
+    Config as Config_alpha_sources,
+    Pipeline,
 )
+from beta.sources import Config as Config_beta_sources
 ```
 
-The first pass collects:
-- `(openhcs.core.config, PipelineConfig)`
-- `(openhcs.core.config, PathPlanningConfig)`
-- `(openhcs.constants, DtypeConversion)`
+and the body uses the aliases. Modules and names are sorted. A nested class or enum is imported by its outermost class and spelled as attribute access (`Outer.Mode.FAST`).
 
-No collisions detected. The second pass emits:
-```python
-from openhcs.core.config import PipelineConfig, PathPlanningConfig
-from openhcs.constants import DtypeConversion
+When several absolute paths share a directory below the filesystem root, that directory is bound once (`path_root = Path('/data/screen')`) and each path is written relative to it (`path_root / 'plate_A'`). Relative paths and strings are left alone.
 
-config = PipelineConfig(
-    path_planning=PathPlanningConfig(...),
-    dtype=DtypeConversion.PRESERVE_INPUT,
-)
-```
+## Formatter Registry
 
-If the object also contained a `PathPlanningConfig` from a different module (e.g., `custom_config.PathPlanningConfig`), the resolution pass would detect the collision and generate aliases:
-```python
-from openhcs.core.config import PathPlanningConfig as PathPlanningConfig_1
-from custom_config import PathPlanningConfig as PathPlanningConfig_2
-```
-
-## Extensible Formatter Registry
-
-Each type maps to a `SourceFormatter` that emits a `SourceFragment(code, imports)`. Formatters register via `__init_subclass__`—defining a formatter class automatically adds it to the registry:
+`SourceFormatter` is an abstract base class. Defining a concrete subclass registers an instance of it through `__init_subclass__`. To format a value, the registry asks each formatter's `can_format` in descending `priority` and uses the first that accepts. A library adds its own without changing `pycodify`:
 
 ```python
-class EnumFormatter(SourceFormatter):
-    priority = 70
+from fractions import Fraction
+from pycodify import SourceFormatter, SourceFragment, imported_name
 
-    def can_format(self, value: Any) -> bool:
-        return isinstance(value, Enum)
+class FractionFormatter(SourceFormatter):
+    priority = 65
 
-    def format(self, value: Enum, context: FormatContext) -> SourceFragment:
-        cls = value.__class__
-        import_pair = (cls.__module__, cls.__name__)
-        name = context.name_mappings.get(import_pair, cls.__name__)
-        return SourceFragment(f"{name}.{value.name}", frozenset([import_pair]))
+    def can_format(self, value):
+        return isinstance(value, Fraction)
+
+    def format(self, value, context):
+        name = imported_name("fractions", "Fraction", context)
+        code = f"{name.code}({value.numerator}, {value.denominator})"
+        return SourceFragment(code, name.imports)
 ```
 
-Priority-based dispatch selects the most specific formatter. Domain extensions add formatters without modifying core code.
+`imported_name` returns the name to use (the alias, if any) and the import pair. A class can instead subclass `PythonSourceLiteral` and implement `source_fragment`; the value then owns its spelling and needs no formatter.
 
-**Clean mode** omits fields matching defaults; **explicit mode** includes all fields for complete reproducibility.
+In **clean mode** a dataclass field equal to its default is omitted; otherwise every constructor field is written. A nested dataclass is omitted only if it also has the default's exact type, so a subclass instance is kept.
+
+## Documents
+
+`SourceDocument` is a mixin for a dataclass saved as one module. Each constructor field becomes one module-level assignment named after the field, and `from_source` executes a module and builds the dataclass from those names. The field declarations are the only place the names are written.
 
 # Research Impact Statement
 
-`pycodify` powers code-based serialization in OpenHCS [@openhcs], enabling:
+`pycodify` is the code serialization layer of OpenHCS [@openhcs]:
 
-- **GUI round-trip editing**: Pipeline Editor serializes steps to Python; users edit code directly; changes reload into the GUI via `pyqt-reactor` [@pyqtreactor]
-- **Remote execution**: ZMQ clients serialize pipeline configurations as Python code, avoiding pickle versioning issues across nodes
-- **Reproducibility**: Pipeline scripts are human-readable records of exact processing parameters
+- **GUI editing as code**: a step, a step list and a configuration are each a `SourceDocument`. The GUI, built on `pyqt-reactive` [@pyqtreactor], shows them as Python; the user edits the code and it is loaded back.
+- **Remote execution**: the ZMQ execution client sends the global configuration as generated source, and the server rebuilds it with `from_source`.
+- **Reproducibility**: a saved pipeline is a Python file stating its parameters.
 
-The formatter registry enables domain extensions without modifying pycodify's core. OpenHCS adds formatters for:
-
-- **FunctionStep**: Pipeline step objects with function patterns and processing configuration
-- **Virtual module rewrites**: External library functions are rewritten to virtual module paths that include OpenHCS decorators:
-
-```python
-class OpenHCSCallableFormatter(SourceFormatter):
-    def format(self, value: Any, context: FormatContext) -> SourceFragment:
-        module = getattr(value, "__module__", None)
-        name = getattr(value, "__name__", None)
-        # Rewrite skimage.filters.gaussian → openhcs.skimage.filters.gaussian
-        if _is_external_registered_function(value):
-            module = f"openhcs.{module}"
-        return SourceFragment(name, frozenset([(module, name)]))
-```
-
-- **Lazy dataclass bypass**: For dataclasses with `__getattribute__` interception (used for hierarchical config inheritance), formatters use `object.__getattribute__` to access raw field values without triggering lazy resolution:
-
-```python
-# In DataclassFormatter
-if hasattr(instance, "_resolve_field_value"):
-    # Bypass __getattribute__ to get raw None vs concrete value
-    current_value = object.__getattribute__(instance, field_name)
-else:
-    current_value = getattr(instance, field_name)
-```
-
-This distinguishes explicitly-set values from inherited ones during serialization.
+OpenHCS registers five formatters of its own: for functions, two function-pattern shapes, materialization specs and `FunctionStep`. Its function references subclass `PythonSourceLiteral`: a function owned by a registry is written as a `get_function('<registry>:<key>')` call, any other as a plain import.
 
 # AI Usage Disclosure
 
