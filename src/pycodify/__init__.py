@@ -14,6 +14,7 @@ from .core import (
     imported_name,
     to_source,
 )
+from .documents import SourceDocument
 from .imports import resolve_imports
 from .paths import PathCollector, PathConstructor, PathFactoring
 
@@ -30,6 +31,7 @@ __all__ = [
     "PathFactoring",
     "PathRendering",
     "PythonSourceLiteral",
+    "SourceDocument",
     "SourceFormatter",
     "SourceFragment",
     "generate_python_source",
